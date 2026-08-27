@@ -65,6 +65,32 @@ func TestGopherTaskQueueUsesSeparateFIFOs(t *testing.T) {
 	assert.Equal(t, "wait-2", task.BaseModel.Name)
 }
 
+func TestGopherTaskQueuePreservesDownloadForSameNameRecreation(t *testing.T) {
+	queue := newGopherTaskQueue()
+	oldDelete := &GopherTask{
+		TaskType: Delete,
+		ClusterBaseModel: &v1beta1.ClusterBaseModel{
+			ObjectMeta: metav1.ObjectMeta{Name: "model", UID: "old-uid"},
+		},
+	}
+	newDownload := &GopherTask{
+		TaskType: Download,
+		ClusterBaseModel: &v1beta1.ClusterBaseModel{
+			ObjectMeta: metav1.ObjectMeta{Name: "model", UID: "new-uid"},
+		},
+	}
+
+	require.True(t, queue.enqueue(newDownload))
+	require.True(t, queue.enqueue(oldDelete))
+
+	task, ok := queue.popHighPriority()
+	require.True(t, ok)
+	assert.Equal(t, oldDelete, task)
+	task, ok = queue.popNormal()
+	require.True(t, ok)
+	assert.Equal(t, newDownload, task)
+}
+
 func TestGopherTaskQueueRoutesObjectStorageDownloadToHighPriority(t *testing.T) {
 	queue := newGopherTaskQueue()
 	task := &GopherTask{

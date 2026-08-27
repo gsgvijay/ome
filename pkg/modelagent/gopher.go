@@ -13,6 +13,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 	"go.uber.org/zap"
@@ -33,14 +34,22 @@ import (
 
 type GopherTaskType string
 
+type GopherDeleteReason string
+
 const (
 	Download         GopherTaskType = "Download"
 	DownloadOverride GopherTaskType = "DownloadOverride"
 	Delete           GopherTaskType = "Delete"
 )
 
+const (
+	DeleteReasonResourceDeleted GopherDeleteReason = "ResourceDeleted"
+	DeleteReasonNodeIneligible  GopherDeleteReason = "NodeIneligible"
+)
+
 type GopherTask struct {
 	TaskType               GopherTaskType
+	DeleteReason           GopherDeleteReason
 	BaseModel              *v1beta1.BaseModel
 	ClusterBaseModel       *v1beta1.ClusterBaseModel
 	TensorRTLLMShapeFilter *TensorRTLLMShapeFilter
@@ -372,6 +381,16 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 	} else {
 		baseModelSpec = task.ClusterBaseModel.Spec
 	}
+	if task.TaskType == Delete {
+		valid, err := s.deleteTaskIsCurrent(task)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			s.logger.Infof("Skipping stale queued model deletion for %s", modelInfo)
+			return nil
+		}
+	}
 
 	// Create context - will be cancellable for downloads
 	ctx := context.Background()
@@ -689,6 +708,64 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 	return nil
 }
 
+func (s *Gopher) deleteTaskIsCurrent(task *GopherTask) (bool, error) {
+	if task.BaseModel != nil && s.baseModelLister != nil {
+		current, err := s.baseModelLister.BaseModels(task.BaseModel.Namespace).Get(task.BaseModel.Name)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read latest BaseModel before delete: %w", err)
+		}
+		return s.deleteTaskMatchesCurrentObject(
+			task.DeleteReason, current.UID, task.BaseModel.UID,
+			current.DeletionTimestamp, current.Spec.Storage)
+	}
+	if task.ClusterBaseModel != nil && s.clusterBaseModelLister != nil {
+		current, err := s.clusterBaseModelLister.Get(task.ClusterBaseModel.Name)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read latest ClusterBaseModel before delete: %w", err)
+		}
+		return s.deleteTaskMatchesCurrentObject(
+			task.DeleteReason, current.UID, task.ClusterBaseModel.UID,
+			current.DeletionTimestamp, current.Spec.Storage)
+	}
+	return true, nil
+}
+
+func (s *Gopher) deleteTaskMatchesCurrentObject(
+	reason GopherDeleteReason,
+	currentUID types.UID,
+	taskUID types.UID,
+	deletionTimestamp *metav1.Time,
+	storageSpec *v1beta1.StorageSpec,
+) (bool, error) {
+	if currentUID != taskUID {
+		return reason != DeleteReasonNodeIneligible, nil
+	}
+	if !deletionTimestamp.IsZero() {
+		return true, nil
+	}
+	if reason != DeleteReasonNodeIneligible {
+		return false, nil
+	}
+	if taskUID == "" {
+		return false, nil
+	}
+	if s.kubeClient == nil || s.nodeLabelReconciler == nil {
+		return false, nil
+	}
+	node, err := s.kubeClient.CoreV1().Nodes().Get(
+		context.TODO(), s.nodeLabelReconciler.nodeName, metav1.GetOptions{})
+	if err != nil {
+		return false, fmt.Errorf("revalidate node eligibility before delete: %w", err)
+	}
+	return !modelStorageTargetsNode(node, storageSpec), nil
+}
+
 func (s *Gopher) unregisterActiveDownload(modelUID string, token string) {
 	s.activeDownloadsMutex.Lock()
 	defer s.activeDownloadsMutex.Unlock()
@@ -829,7 +906,7 @@ func (s *Gopher) isPathReferencedByOtherModels(targetPath string, excludeBaseMod
 
 	for _, baseModel := range baseModels {
 		// Skip the model being deleted
-		if excludeBaseModel != nil && baseModel.Namespace == excludeBaseModel.Namespace && baseModel.Name == excludeBaseModel.Name {
+		if sameBaseModelObject(baseModel, excludeBaseModel) {
 			continue
 		}
 
@@ -848,7 +925,7 @@ func (s *Gopher) isPathReferencedByOtherModels(targetPath string, excludeBaseMod
 
 	for _, clusterBaseModel := range clusterBaseModels {
 		// Skip the model being deleted
-		if excludeClusterBaseModel != nil && clusterBaseModel.Name == excludeClusterBaseModel.Name {
+		if sameClusterBaseModelObject(clusterBaseModel, excludeClusterBaseModel) {
 			continue
 		}
 
@@ -860,6 +937,20 @@ func (s *Gopher) isPathReferencedByOtherModels(targetPath string, excludeBaseMod
 	}
 
 	return false, nil
+}
+
+func sameBaseModelObject(current, excluded *v1beta1.BaseModel) bool {
+	if current == nil || excluded == nil || current.Namespace != excluded.Namespace || current.Name != excluded.Name {
+		return false
+	}
+	return current.UID == excluded.UID
+}
+
+func sameClusterBaseModelObject(current, excluded *v1beta1.ClusterBaseModel) bool {
+	if current == nil || excluded == nil || current.Name != excluded.Name {
+		return false
+	}
+	return current.UID == excluded.UID
 }
 
 func getModelInfoForLogging(task *GopherTask) string {
