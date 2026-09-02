@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/ome/pkg/apis/ome/v1beta1"
 	"sigs.k8s.io/ome/pkg/constants"
@@ -322,6 +323,29 @@ func TestShouldDownloadModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEligibleToIneligibleUpdateQueuesNodeLocalDelete(t *testing.T) {
+	tasks := make(chan *GopherTask, 1)
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: "node-a", Labels: map[string]string{"gpu": "a10"},
+	}}
+	scout := &Scout{
+		nodeInfo: node, gopherChan: tasks, logger: zap.NewNop().Sugar(),
+	}
+	oldModel := &v1beta1.ClusterBaseModel{
+		ObjectMeta: metav1.ObjectMeta{Name: "model", UID: types.UID("model-uid")},
+		Spec: v1beta1.BaseModelSpec{Storage: &v1beta1.StorageSpec{
+			NodeSelector: map[string]string{"gpu": "a10"},
+		}},
+	}
+	newModel := oldModel.DeepCopy()
+	newModel.Spec.Storage.NodeSelector = map[string]string{"gpu": "h100"}
+
+	scout.updateClusterBaseModel(oldModel, newModel)
+	task := <-tasks
+	assert.Equal(t, Delete, task.TaskType)
+	assert.Equal(t, DeleteReasonNodeIneligible, task.DeleteReason)
 }
 
 // Helper function to return a string pointer

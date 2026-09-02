@@ -404,7 +404,7 @@ func (w *Scout) updateBaseModel(old, new interface{}) {
 		!w.shouldDownloadModel(newBaseModel.Spec.Storage) {
 		// shape config changed, delete it from the current node
 		w.logger.Infof("Target shapes excluded BaseModel update: %s in namespace %s, deleting", newBaseModel.GetName(), newBaseModel.GetNamespace())
-		w.deleteBaseModel(new)
+		w.deleteBaseModelForReason(new, DeleteReasonNodeIneligible)
 		return
 	}
 
@@ -453,7 +453,7 @@ func (w *Scout) updateClusterBaseModel(old, new interface{}) {
 		!w.shouldDownloadModel(newClusterBaseModel.Spec.Storage) {
 		// shape config changed, delete it from the current node
 		w.logger.Infof("Target shapes excluded ClusterBaseModel %s, deleting", newClusterBaseModel.GetName())
-		w.deleteClusterBaseModel(new)
+		w.deleteClusterBaseModelForReason(new, DeleteReasonNodeIneligible)
 		return
 	}
 
@@ -514,6 +514,10 @@ func downloadOverrideInputsFromSpec(spec v1beta1.BaseModelSpec) downloadOverride
 }
 
 func (w *Scout) deleteBaseModel(obj interface{}) {
+	w.deleteBaseModelForReason(obj, DeleteReasonResourceDeleted)
+}
+
+func (w *Scout) deleteBaseModelForReason(obj interface{}, reason GopherDeleteReason) {
 	baseModel, ok := obj.(*v1beta1.BaseModel)
 	if !ok {
 		w.logger.Errorf("Failed to convert %v to BaseModel", obj)
@@ -523,14 +527,19 @@ func (w *Scout) deleteBaseModel(obj interface{}) {
 	w.logger.Infof("Deleting BaseModel: %s in namespace %s", baseModel.Name, baseModel.Namespace)
 
 	gopherTask := &GopherTask{
-		TaskType:  Delete,
-		BaseModel: baseModel,
+		TaskType:     Delete,
+		DeleteReason: reason,
+		BaseModel:    baseModel,
 	}
 
 	w.gopherChan <- gopherTask
 }
 
 func (w *Scout) deleteClusterBaseModel(obj interface{}) {
+	w.deleteClusterBaseModelForReason(obj, DeleteReasonResourceDeleted)
+}
+
+func (w *Scout) deleteClusterBaseModelForReason(obj interface{}, reason GopherDeleteReason) {
 	clusterBaseModel, ok := obj.(*v1beta1.ClusterBaseModel)
 	if !ok {
 		w.logger.Errorf("Failed to convert %v to ClusterBaseModel", obj)
@@ -541,6 +550,7 @@ func (w *Scout) deleteClusterBaseModel(obj interface{}) {
 
 	gopherTask := &GopherTask{
 		TaskType:         Delete,
+		DeleteReason:     reason,
 		ClusterBaseModel: clusterBaseModel,
 	}
 	w.gopherChan <- gopherTask
@@ -768,35 +778,40 @@ func (w *Scout) shouldDownloadModelCommon(storageSpec *v1beta1.StorageSpec, defa
 		}
 	}
 
-	// Check NodeSelector if specified
-	if len(storageSpec.NodeSelector) > 0 {
-		for key, value := range storageSpec.NodeSelector {
-			nodeValue, exists := w.nodeInfo.Labels[key]
-			if !exists || nodeValue != value {
-				return false
-			}
-		}
+	if !modelStorageTargetsNode(w.nodeInfo, storageSpec) {
+		return false
 	}
 
-	// Check NodeAffinity if specified
-	if storageSpec.NodeAffinity != nil && storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
-		nodeSelectorTerms := storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-		if len(nodeSelectorTerms) > 0 {
-			matches := false
-			for _, term := range nodeSelectorTerms {
-				if w.nodeMatchesSelectorTerm(term) {
-					matches = true
-					break
-				}
-			}
-			if !matches {
-				return false
-			}
-		}
-	}
-
-	// Return the caller-provided default when no other condition rejected it
 	return defaultDecision
+}
+
+func modelStorageTargetsNode(node *v1.Node, storageSpec *v1beta1.StorageSpec) bool {
+	if storageSpec == nil {
+		return true
+	}
+	if node == nil {
+		return false
+	}
+	for key, value := range storageSpec.NodeSelector {
+		if nodeValue, exists := node.Labels[key]; !exists || nodeValue != value {
+			return false
+		}
+	}
+	if storageSpec.NodeAffinity == nil ||
+		storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return true
+	}
+	terms := storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) == 0 {
+		return true
+	}
+	matcher := &Scout{nodeInfo: node}
+	for _, term := range terms {
+		if matcher.nodeMatchesSelectorTerm(term) {
+			return true
+		}
+	}
+	return false
 }
 
 // shouldDownloadModel checks if a model should be downloaded to this node based on node selector and node affinity
