@@ -11,9 +11,11 @@ type gopherTaskQueue struct {
 	mutex               sync.Mutex
 	cond                *sync.Cond
 	high                []*GopherTask
+	urgentDownload      []*GopherTask
 	normalDownload      []*GopherTask
 	normalRevalidation  []*GopherTask
 	pendingHigh         []*GopherTask
+	pendingUrgent       []*GopherTask
 	pendingDownload     []*GopherTask
 	pendingRevalidation []*GopherTask
 	capacity            int
@@ -28,7 +30,10 @@ type gopherTaskEnqueueResult struct {
 type gopherTaskQueueLane int
 
 const (
+	// Worker selection and download urgency are separate. Only the first lane
+	// is consumed by cleanup/reuse workers; the others share download workers.
 	gopherTaskQueueLaneHigh gopherTaskQueueLane = iota
+	gopherTaskQueueLaneUrgentDownload
 	gopherTaskQueueLaneDownload
 	gopherTaskQueueLaneRevalidation
 )
@@ -103,11 +108,8 @@ func (q *gopherTaskQueue) retainedTaskLocked(incoming *GopherTask) *GopherTask {
 	}
 	selected := incoming
 	retained := false
-	for _, tasks := range [][]*GopherTask{
-		q.high, q.normalDownload, q.normalRevalidation,
-		q.pendingHigh, q.pendingDownload, q.pendingRevalidation,
-	} {
-		for _, queued := range tasks {
+	for _, tasks := range q.allQueuesLocked() {
+		for _, queued := range *tasks {
 			if getModelUID(queued) == uid && continuationSupersededBy(queued, selected) {
 				selected = queued
 				retained = true
@@ -127,6 +129,9 @@ func continuationSupersededBy(queued, incoming *GopherTask) bool {
 	if isFreshModelDownloadTask(queued) || isFreshModelDownloadTask(incoming) {
 		return isFreshModelDownloadTask(queued)
 	}
+	if queuedPriority, incomingPriority := downloadTaskLane(queued), downloadTaskLane(incoming); queuedPriority != incomingPriority {
+		return queuedPriority < incomingPriority
+	}
 	if queuedLane, incomingLane := taskQueueLane(queued), taskQueueLane(incoming); queuedLane != incomingLane {
 		return queuedLane < incomingLane
 	}
@@ -137,24 +142,29 @@ func continuationSupersededBy(queued, incoming *GopherTask) bool {
 }
 
 func (q *gopherTaskQueue) removeSupersededLocked(task *GopherTask) {
-	if task.TaskType == Delete {
-		q.high = removeTasksForModelUID(q.high, task)
-		q.normalDownload = removeTasksForModelUID(q.normalDownload, task)
-		q.normalRevalidation = removeTasksForModelUID(q.normalRevalidation, task)
-		q.pendingHigh = removeTasksForModelUID(q.pendingHigh, task)
-		q.pendingDownload = removeTasksForModelUID(q.pendingDownload, task)
-		q.pendingRevalidation = removeTasksForModelUID(q.pendingRevalidation, task)
-		return
-	}
 	// Only a fresh observation or stronger continuation reaches this point.
 	// Coalesce across runnable and deferred lanes so displacement cannot leave
 	// duplicate retries. Delete tasks and different object UIDs remain distinct.
-	q.high = removeSupersededTasks(q.high, task)
-	q.normalDownload = removeSupersededTasks(q.normalDownload, task)
-	q.normalRevalidation = removeSupersededTasks(q.normalRevalidation, task)
-	q.pendingHigh = removeSupersededTasks(q.pendingHigh, task)
-	q.pendingDownload = removeSupersededTasks(q.pendingDownload, task)
-	q.pendingRevalidation = removeSupersededTasks(q.pendingRevalidation, task)
+	for _, tasks := range q.allQueuesLocked() {
+		if task.TaskType == Delete {
+			*tasks = removeTasksForModelUID(*tasks, task)
+		} else {
+			*tasks = removeSupersededTasks(*tasks, task)
+		}
+	}
+}
+
+// These accessors require mutex to be held and return lanes in priority order.
+func (q *gopherTaskQueue) runnableQueuesLocked() []*[]*GopherTask {
+	return []*[]*GopherTask{&q.high, &q.urgentDownload, &q.normalDownload, &q.normalRevalidation}
+}
+
+func (q *gopherTaskQueue) pendingQueuesLocked() []*[]*GopherTask {
+	return []*[]*GopherTask{&q.pendingHigh, &q.pendingUrgent, &q.pendingDownload, &q.pendingRevalidation}
+}
+
+func (q *gopherTaskQueue) allQueuesLocked() []*[]*GopherTask {
+	return append(q.runnableQueuesLocked(), q.pendingQueuesLocked()...)
 }
 
 func (q *gopherTaskQueue) hasCapacity() bool {
@@ -162,82 +172,64 @@ func (q *gopherTaskQueue) hasCapacity() bool {
 }
 
 func (q *gopherTaskQueue) appendPendingLocked(task *GopherTask, lane gopherTaskQueueLane) {
-	switch lane {
-	case gopherTaskQueueLaneHigh:
-		q.pendingHigh = append(q.pendingHigh, task)
-	case gopherTaskQueueLaneDownload:
-		q.pendingDownload = append(q.pendingDownload, task)
-	case gopherTaskQueueLaneRevalidation:
-		q.pendingRevalidation = append(q.pendingRevalidation, task)
-	}
+	tasks := q.pendingQueuesLocked()[lane]
+	*tasks = append(*tasks, task)
 }
 
 func (q *gopherTaskQueue) rebalanceLocked() {
 	if q.closed {
 		return
 	}
-	for len(q.pendingHigh) > 0 {
-		if !q.hasCapacity() && !q.deferLowestPriorityRunnableLocked() {
-			break
-		}
-		q.high = append(q.high, q.pendingHigh[0])
-		q.pendingHigh = q.pendingHigh[1:]
-	}
-	for q.hasCapacity() {
-		switch {
-		case len(q.pendingDownload) > 0:
-			q.normalDownload = append(q.normalDownload, q.pendingDownload[0])
-			q.pendingDownload = q.pendingDownload[1:]
-		case len(q.pendingRevalidation) > 0:
-			q.normalRevalidation = append(q.normalRevalidation, q.pendingRevalidation[0])
-			q.pendingRevalidation = q.pendingRevalidation[1:]
-		default:
-			return
+	runnable := q.runnableQueuesLocked()
+	for lane, pending := range q.pendingQueuesLocked() {
+		for len(*pending) > 0 {
+			if !q.hasCapacity() && !q.deferLowerPriorityRunnableLocked(lane) {
+				break
+			}
+			*runnable[lane] = append(*runnable[lane], (*pending)[0])
+			*pending = (*pending)[1:]
 		}
 	}
 }
 
-func (q *gopherTaskQueue) deferLowestPriorityRunnableLocked() bool {
-	if len(q.normalRevalidation) > 0 {
-		deferred := q.normalRevalidation[len(q.normalRevalidation)-1]
-		q.normalRevalidation = q.normalRevalidation[:len(q.normalRevalidation)-1]
-		q.pendingRevalidation = append(q.pendingRevalidation, deferred)
-		return true
-	}
-	if len(q.normalDownload) > 0 {
-		deferred := q.normalDownload[len(q.normalDownload)-1]
-		q.normalDownload = q.normalDownload[:len(q.normalDownload)-1]
-		q.pendingDownload = append(q.pendingDownload, deferred)
-		return true
+func (q *gopherTaskQueue) deferLowerPriorityRunnableLocked(incomingLane int) bool {
+	runnable, pending := q.runnableQueuesLocked(), q.pendingQueuesLocked()
+	for lane := len(runnable) - 1; lane > incomingLane; lane-- {
+		tasks := runnable[lane]
+		if len(*tasks) > 0 {
+			deferred := (*tasks)[len(*tasks)-1]
+			*tasks = (*tasks)[:len(*tasks)-1]
+			// Displaced runnable work predates this lane's pending work.
+			*pending[lane] = append([]*GopherTask{deferred}, *pending[lane]...)
+			return true
+		}
 	}
 	return false
 }
 
 func (q *gopherTaskQueue) isPendingLocked(target *GopherTask) bool {
-	return containsTask(q.pendingHigh, target) ||
-		containsTask(q.pendingDownload, target) ||
-		containsTask(q.pendingRevalidation, target)
+	for _, tasks := range q.pendingQueuesLocked() {
+		if containsTask(*tasks, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (q *gopherTaskQueue) popNormal() (*GopherTask, bool) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
-	for len(q.normalDownload) == 0 && len(q.normalRevalidation) == 0 && !q.closed {
+	for len(q.urgentDownload) == 0 && len(q.normalDownload) == 0 && len(q.normalRevalidation) == 0 && !q.closed {
 		q.cond.Wait()
 	}
-	if len(q.normalDownload) > 0 {
-		task := q.normalDownload[0]
-		q.normalDownload = q.normalDownload[1:]
-		q.rebalanceLocked()
-		q.cond.Broadcast()
-		return task, true
-	}
-	if len(q.normalRevalidation) > 0 {
-		task := q.normalRevalidation[0]
-		q.normalRevalidation = q.normalRevalidation[1:]
-		q.rebalanceLocked()
-		q.cond.Broadcast()
-		return task, true
+	for _, tasks := range q.runnableQueuesLocked()[1:] {
+		if len(*tasks) > 0 {
+			task := (*tasks)[0]
+			*tasks = (*tasks)[1:]
+			q.rebalanceLocked()
+			q.cond.Broadcast()
+			return task, true
+		}
 	}
 	return nil, false
 }
@@ -272,12 +264,15 @@ func (q *gopherTaskQueue) len() int {
 }
 
 func (q *gopherTaskQueue) lenLocked() int {
-	return q.runnableLenLocked() + len(q.pendingHigh) +
-		len(q.pendingDownload) + len(q.pendingRevalidation)
+	count := 0
+	for _, tasks := range q.allQueuesLocked() {
+		count += len(*tasks)
+	}
+	return count
 }
 
 func (q *gopherTaskQueue) runnableLenLocked() int {
-	return len(q.high) + len(q.normalDownload) + len(q.normalRevalidation)
+	return len(q.high) + len(q.urgentDownload) + len(q.normalDownload) + len(q.normalRevalidation)
 }
 
 func containsTask(tasks []*GopherTask, target *GopherTask) bool {
@@ -290,28 +285,29 @@ func containsTask(tasks []*GopherTask, target *GopherTask) bool {
 }
 
 func taskQueueLane(task *GopherTask) gopherTaskQueueLane {
-	if isFreshModelDownloadTask(task) {
-		switch effectiveTaskPriority(task) {
-		case v1beta1.ModelDownloadPriorityHigh:
-			return gopherTaskQueueLaneHigh
-		case v1beta1.ModelDownloadPriorityBackground:
-			return gopherTaskQueueLaneRevalidation
-		default:
-			return gopherTaskQueueLaneDownload
-		}
-	}
 	if shouldUseHighPriorityQueue(task) {
 		return gopherTaskQueueLaneHigh
 	}
+	return downloadTaskLane(task)
+}
+
+func downloadTaskLane(task *GopherTask) gopherTaskQueueLane {
 	if task.RevalidationReplay {
 		return gopherTaskQueueLaneRevalidation
 	}
-	return gopherTaskQueueLaneDownload
+	switch effectiveTaskPriority(task) {
+	case v1beta1.ModelDownloadPriorityHigh:
+		return gopherTaskQueueLaneUrgentDownload
+	case v1beta1.ModelDownloadPriorityBackground:
+		return gopherTaskQueueLaneRevalidation
+	default:
+		return gopherTaskQueueLaneDownload
+	}
 }
 
 func shouldUseHighPriorityQueue(task *GopherTask) bool {
 	return task.TaskType == Delete ||
-		isObjectStorageDownloadTask(task) ||
+		(isObjectStorageDownloadTask(task) && effectiveTaskPriority(task) != v1beta1.ModelDownloadPriorityBackground) ||
 		(!task.NormalPriorityOnly && !task.SamePathWaitStartedAt.IsZero())
 }
 
@@ -329,11 +325,6 @@ func effectiveTaskPriority(task *GopherTask) v1beta1.ModelDownloadPriority {
 	}
 	if task.DownloadPriority == v1beta1.ModelDownloadPriorityBackground {
 		return v1beta1.ModelDownloadPriorityBackground
-	}
-	// Preserve the existing Object Storage fast path unless the model author
-	// explicitly selected Background.
-	if isObjectStorageDownloadTask(task) {
-		return v1beta1.ModelDownloadPriorityHigh
 	}
 	return v1beta1.ModelDownloadPriorityStandard
 }

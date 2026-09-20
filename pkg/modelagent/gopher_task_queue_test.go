@@ -270,7 +270,7 @@ func TestGopherTaskQueueHighPrioritySupersedesBackgroundForSameModel(t *testing.
 		DownloadPriority: v1beta1.ModelDownloadPriorityHigh,
 	}).accepted)
 
-	task, ok := queue.popHighPriority()
+	task, ok := queue.popNormal()
 	require.True(t, ok)
 	assert.Equal(t, v1beta1.ModelDownloadPriorityHigh, task.DownloadPriority)
 	assert.Equal(t, 0, queue.len())
@@ -312,7 +312,7 @@ func TestGopherTaskQueueHighPriorityPreservesDisplacedBackgroundAtCapacity(t *te
 	result := queue.enqueue(demand)
 	require.True(t, result.accepted)
 	assert.False(t, result.deferred)
-	task, ok := queue.popHighPriority()
+	task, ok := queue.popNormal()
 	require.True(t, ok)
 	assert.Equal(t, "demand", task.BaseModel.Name)
 	task, ok = queue.popNormal()
@@ -345,7 +345,10 @@ func TestGopherDispatcherObservesHighTaskWhileBackgroundWaitsForCapacity(t *test
 	sendTaskAndWait(t, gopherChan, background)
 	sendTaskAndWait(t, gopherChan, demand)
 
-	task, ok := queue.popHighPriority()
+	// The dispatcher has received demand, but may not have enqueued it yet.
+	// Wait for that observation before allowing a download worker to pop.
+	require.Eventually(t, func() bool { return queue.len() == 3 }, time.Second, time.Millisecond)
+	task, ok := queue.popNormal()
 	require.True(t, ok)
 	assert.Same(t, demand, task)
 	task, ok = queue.popNormal()

@@ -48,13 +48,13 @@ func TestGopherTaskQueueRetryKeepsFreshDownload(t *testing.T) {
 					require.Equal(t, 3, queue.len(), "the retry must coalesce into the existing download")
 
 					// Dequeuing must retain both the fresh intent and its FIFO position.
-					first, ok := queue.popHighPriority()
+					first, ok := queue.popNormal()
 					require.True(t, ok)
 					require.Same(t, blocker, first)
-					second, ok := queue.popHighPriority()
+					second, ok := queue.popNormal()
 					require.True(t, ok)
 					require.Same(t, fresh, second)
-					third, ok := queue.popHighPriority()
+					third, ok := queue.popNormal()
 					require.True(t, ok)
 					require.Same(t, peer, third)
 					assert.Zero(t, queue.len())
@@ -74,6 +74,7 @@ func TestGopherTaskQueueCoalescesContinuationPriority(t *testing.T) {
 			queue := newGopherTaskQueue(1)
 			t.Cleanup(queue.close)
 			blocker := coalescingTestTask("BaseModel", "blocker", Download)
+			blocker.SamePathWaitStartedAt = time.Now()
 			queue.enqueue(blocker)
 			stronger := coalescingTestTask("BaseModel", "model", Download)
 			stronger.SamePathWaitStartedAt = time.Now().Add(-time.Minute)
@@ -110,7 +111,7 @@ func TestGopherTaskQueueFreshUpdateCanLowerPriority(t *testing.T) {
 	old.SamePathWaitStartedAt = time.Now()
 	queue.enqueue(old)
 	require.Equal(t, 2, queue.len())
-	queue.popHighPriority()
+	queue.popNormal()
 	task, ok := queue.popNormal()
 	require.True(t, ok)
 	assert.Same(t, latest, task, "a new informer observation must be able to remove old serving demand")
@@ -139,7 +140,7 @@ func TestGopherTaskQueueCoalescesEqualLaneWithoutLosingOverride(t *testing.T) {
 				queue.enqueue(override)
 			}
 			require.Equal(t, 2, queue.len())
-			queue.popHighPriority()
+			queue.popNormal()
 			task, ok := queue.popNormal()
 			require.True(t, ok)
 			assert.Same(t, override, task)
@@ -150,7 +151,9 @@ func TestGopherTaskQueueCoalescesEqualLaneWithoutLosingOverride(t *testing.T) {
 func TestGopherTaskQueueEquivalentRetriesKeepFIFOAndWaitDeadline(t *testing.T) {
 	queue := newGopherTaskQueue(1)
 	t.Cleanup(queue.close)
-	queue.enqueue(coalescingTestTask("BaseModel", "blocker", Download))
+	blocker := coalescingTestTask("BaseModel", "blocker", Download)
+	blocker.SamePathWaitStartedAt = time.Now()
+	queue.enqueue(blocker)
 	wait := coalescingTestTask("BaseModel", "model", Download)
 	wait.SamePathWaitStartedAt = time.Now().Add(-time.Minute)
 	peer := coalescingTestTask("BaseModel", "peer", Download)
@@ -188,8 +191,11 @@ func TestGopherTaskQueueDeleteFencesRetriesWithoutLosingRecreation(t *testing.T)
 	retry.NormalPriorityOnly = true
 	queue.enqueue(retry)
 	require.Equal(t, 3, queue.len())
-	for _, want := range []*GopherTask{deleted, blocker, recreated} {
-		got, ok := queue.popHighPriority()
+	got, ok := queue.popHighPriority()
+	require.True(t, ok)
+	assert.Same(t, deleted, got)
+	for _, want := range []*GopherTask{blocker, recreated} {
+		got, ok := queue.popNormal()
 		require.True(t, ok)
 		assert.Same(t, want, got)
 	}

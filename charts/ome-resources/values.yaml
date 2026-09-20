@@ -679,7 +679,9 @@ modelAgent:
   # Optional user-supplied PriorityClass. Model-agent is not system critical.
   priorityClassName: ""
   serviceAccountName: ome-model-agent
+  # Remote weight transfers, ordered High, Standard, then Background.
   numDownloadWorkers: 2
+  # Dedicated delete/reuse workers; never used for remote weight transfers.
   numHighPriorityWorkers: 1
   taskSchedulerCapacity: 4096
   # Maximum time to wait for another task populating the same local artifact

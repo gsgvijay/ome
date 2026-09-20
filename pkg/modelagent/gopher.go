@@ -45,9 +45,11 @@ type GopherTask struct {
 	ClusterBaseModel       *v1beta1.ClusterBaseModel
 	TensorRTLLMShapeFilter *TensorRTLLMShapeFilter
 	SamePathWaitStartedAt  time.Time
-	NormalPriorityOnly     bool
-	RevalidationReplay     bool
-	DownloadPriority       v1beta1.ModelDownloadPriority
+	// NormalPriorityOnly selects download workers after a reuse miss. It must
+	// not lower DownloadPriority, which orders work within that worker pool.
+	NormalPriorityOnly bool
+	RevalidationReplay bool
+	DownloadPriority   v1beta1.ModelDownloadPriority
 }
 
 type activeDownload struct {
@@ -81,6 +83,10 @@ type Gopher struct {
 	samePathWaitTimeout time.Duration
 
 	startupReadyModelKeys map[string]struct{}
+
+	// Optional downloader dependencies; production uses the SDKs when unset.
+	snapshotDownload      func(context.Context, *xet.DownloadConfig, xet.ProgressHandler, time.Duration) (string, error)
+	objectStorageDownload func(context.Context, *ociobjectstore.ObjectURI, string, *GopherTask) error
 }
 
 const (
@@ -358,7 +364,9 @@ func (s *Gopher) processTask(task *GopherTask) error {
 	return s.processTaskWithOptions(task, true)
 }
 
-func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload bool) error {
+// Cleanup/reuse workers pass false: no storage backend may start a remote
+// weight transfer on that pool, including DownloadOverride and cache misses.
+func (s *Gopher) processTaskWithOptions(task *GopherTask, allowRemoteDownload bool) error {
 	if task.BaseModel == nil && task.ClusterBaseModel == nil {
 		return fmt.Errorf("gopher got empty task")
 	}
@@ -464,8 +472,12 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				return err
 			}
 			downloadObjectStorageModel := func() error {
+				download := s.objectStorageDownload
+				if download == nil {
+					download = s.downloadModel
+				}
 				err = utils.Retry(s.downloadRetry, 100*time.Millisecond, func() error {
-					downloadErr := s.downloadModel(ctx, osUri, destPath, task)
+					downloadErr := download(ctx, osUri, destPath, task)
 					if downloadErr != nil {
 						// Check if context was cancelled
 						if ctx.Err() != nil {
@@ -493,20 +505,23 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				return nil
 			}
 
+			needsDownload := true
 			if shouldUseSamePathObjectStorageReuse(task) {
 				if matchedKey, reused := s.findReadyObjectStorageModelWithSamePath(ctx, task, baseModelSpec, destPath); reused {
 					s.logger.Infof("Reusing Ready same-path model artifact for %s/%s from %s at %s", namespace, name, matchedKey, destPath)
+					needsDownload = false
 				} else if matchedKey, wait := s.findUpdatingObjectStorageModelWithSamePath(ctx, task, baseModelSpec, destPath); wait &&
 					s.requeueSamePathInFlightReuseWait(task, matchedKey) {
 					return nil
-				} else if !allowFallbackDownload {
+				}
+			}
+			if needsDownload {
+				if !allowRemoteDownload {
 					s.demoteToNormalPriority(task)
 					return nil
 				} else if err := downloadObjectStorageModel(); err != nil {
 					return err
 				}
-			} else if err := downloadObjectStorageModel(); err != nil {
-				return err
 			}
 			// Parse model config and update ConfigMap
 			// We can pass either BaseModel or ClusterBaseModel based on the task's model type
@@ -530,6 +545,10 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 		case storage.StorageTypeVendor:
 			s.logger.Infof("Skipping download for model %s", modelInfo)
 		case storage.StorageTypeHuggingFace:
+			if !allowRemoteDownload {
+				s.demoteToNormalPriority(task)
+				return nil
+			}
 			s.logger.Infof("Starting Hugging Face download for model %s", modelInfo)
 
 			// Handle Hugging Face model download
@@ -708,7 +727,7 @@ func (s *Gopher) demoteToNormalPriority(task *GopherTask) {
 	}
 	task.NormalPriorityOnly = true
 	s.classifyStartupRevalidation(task)
-	s.logger.Infof("Demoting %s to normal priority for fallback download/validation", getModelInfoForLogging(task))
+	s.logger.Infof("Handing %s to download workers with priority %s for fallback download/validation", getModelInfoForLogging(task), effectiveTaskPriority(task))
 	s.enqueueTask(task)
 }
 
@@ -1594,7 +1613,11 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 		// Perform snapshot download with progress tracking
 		// Note: Progress is cleared atomically with status update in ReconcileModelStatus
 		// when status becomes Ready/Failed, ensuring the controller sees the final progress
-		downloadPath, err := xet.SnapshotDownloadWithProgress(ctx, config, progressHandler, progressThrottle)
+		download := s.snapshotDownload
+		if download == nil {
+			download = xet.SnapshotDownloadWithProgress
+		}
+		downloadPath, err := download(ctx, config, progressHandler, progressThrottle)
 
 		if err != nil {
 			// Check error type for better handling
