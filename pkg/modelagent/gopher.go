@@ -37,6 +37,8 @@ const (
 	Download         GopherTaskType = "Download"
 	DownloadOverride GopherTaskType = "DownloadOverride"
 	Delete           GopherTaskType = "Delete"
+	// Reprioritize updates queued work only; it never starts a download.
+	Reprioritize GopherTaskType = "Reprioritize"
 )
 
 type GopherTask struct {
@@ -218,6 +220,18 @@ func (s *Gopher) enqueueTask(task *GopherTask) {
 	if task.TaskType == Delete {
 		s.cancelActiveDownload(task)
 	} else {
+		// A worker may return an old same-path retry after demand has changed.
+		// Read priority from the informer cache without changing its download
+		// inputs, override intent, or retry state. Do not mutate worker-owned tasks.
+		if priority, ok := s.currentDownloadPriority(task); ok {
+			if task.DownloadPriority != priority {
+				updated := *task
+				updated.DownloadPriority = priority
+				task = &updated
+			}
+		} else if task.TaskType == Reprioritize {
+			return
+		}
 		s.classifyStartupRevalidation(task)
 	}
 	result := s.taskQueue.enqueue(task)
@@ -228,6 +242,26 @@ func (s *Gopher) enqueueTask(task *GopherTask) {
 	if result.deferred {
 		s.logger.Debugf("Deferred model-agent task in scheduler-owned pending state: %s", getModelInfoForLogging(task))
 	}
+}
+
+// currentDownloadPriority fences stale events by UID and uses the latest cached
+// priority even if an older informer event or delayed retry is being dispatched.
+func (s *Gopher) currentDownloadPriority(task *GopherTask) (v1beta1.ModelDownloadPriority, bool) {
+	if task.BaseModel != nil && s.baseModelLister != nil {
+		model, err := s.baseModelLister.BaseModels(task.BaseModel.Namespace).Get(task.BaseModel.Name)
+		if err != nil || model.UID != task.BaseModel.UID || !model.DeletionTimestamp.IsZero() {
+			return "", false
+		}
+		return effectiveModelDownloadPriority(model.Spec.Storage, &model.Status), true
+	}
+	if task.ClusterBaseModel != nil && s.clusterBaseModelLister != nil {
+		model, err := s.clusterBaseModelLister.Get(task.ClusterBaseModel.Name)
+		if err != nil || model.UID != task.ClusterBaseModel.UID || !model.DeletionTimestamp.IsZero() {
+			return "", false
+		}
+		return effectiveModelDownloadPriority(model.Spec.Storage, &model.Status), true
+	}
+	return task.DownloadPriority, true
 }
 
 func (s *Gopher) runWorker() {

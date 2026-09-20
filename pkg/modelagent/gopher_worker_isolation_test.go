@@ -23,7 +23,7 @@ func isolationTestTask(name, uri string, priority v1beta1.ModelDownloadPriority,
 		TaskType: taskType, DownloadPriority: priority,
 		BaseModel: &v1beta1.BaseModel{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "service-ns", UID: types.UID(name)},
-			Spec:       v1beta1.BaseModelSpec{Storage: &v1beta1.StorageSpec{StorageUri: &uri}},
+			Spec:       v1beta1.BaseModelSpec{Storage: &v1beta1.StorageSpec{StorageUri: &uri, DownloadPriority: &priority}},
 		},
 	}
 }

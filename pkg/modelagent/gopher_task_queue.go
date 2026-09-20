@@ -78,6 +78,10 @@ func (q *gopherTaskQueue) enqueueLocked(task *GopherTask) gopherTaskEnqueueResul
 	if q.closed {
 		return gopherTaskEnqueueResult{}
 	}
+	if task.TaskType == Reprioritize {
+		q.reprioritizeLocked(task)
+		return gopherTaskEnqueueResult{accepted: true}
+	}
 	if retained := q.retainedTaskLocked(task); retained != nil {
 		return gopherTaskEnqueueResult{accepted: true, deferred: q.isPendingLocked(retained)}
 	}
@@ -95,6 +99,36 @@ func (q *gopherTaskQueue) enqueueLocked(task *GopherTask) gopherTaskEnqueueResul
 		accepted: true,
 		deferred: q.isPendingLocked(task),
 	}
+}
+
+// reprioritizeLocked changes existing downloads only. An absent UID is a no-op:
+// active and completed downloads must not be restarted by a scheduling update.
+func (q *gopherTaskQueue) reprioritizeLocked(update *GopherTask) {
+	uid := getModelUID(update)
+	if uid == "" {
+		return
+	}
+	var moved []*GopherTask
+	for _, tasks := range q.allQueuesLocked() {
+		kept := (*tasks)[:0]
+		for _, task := range *tasks {
+			if getModelUID(task) == uid && (task.TaskType == Download || task.TaskType == DownloadOverride) {
+				updated := *task
+				updated.DownloadPriority = update.DownloadPriority
+				if taskQueueLane(&updated) != taskQueueLane(task) {
+					moved = append(moved, &updated)
+					continue
+				}
+				task = &updated
+			}
+			kept = append(kept, task)
+		}
+		*tasks = kept
+	}
+	for _, task := range moved {
+		q.appendPendingLocked(task, taskQueueLane(task))
+	}
+	q.rebalanceLocked()
 }
 
 // retainedTaskLocked coalesces retries into the strongest queued intent without

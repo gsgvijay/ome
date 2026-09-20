@@ -360,14 +360,14 @@ func (w *Scout) updateBaseModel(old, new interface{}) {
 
 	policyChanged := w.isToDownloadOverrideDueToDownloadPolicyBasedOnBM(oldBaseModel, newBaseModel)
 
-	// Exclude DownloadPolicy from Spec diff — policy changes are detected separately above.
-	ignoreDownloadPolicy := cmpopts.IgnoreFields(v1beta1.StorageSpec{}, "DownloadPolicy")
+	// Policy changes are handled separately; priority changes only reorder work.
+	ignoreScheduling := cmpopts.IgnoreFields(v1beta1.StorageSpec{}, "DownloadPolicy", "DownloadPriority")
 
 	hasChanges, err := hasDownloadOverrideChanges([]downloadOverrideChangeCandidate{
 		{"Labels", oldBaseModel.Labels, newBaseModel.Labels},
 		{"Annotations", oldBaseModel.Annotations, newBaseModel.Annotations},
 		{"DownloadOverrideInputs", downloadOverrideInputsFromSpec(oldBaseModel.Spec), downloadOverrideInputsFromSpec(newBaseModel.Spec)},
-	}, ignoreDownloadPolicy)
+	}, ignoreScheduling)
 	if err != nil {
 		w.logger.Errorf("Failed to diff BaseModel %s in namespace %s: %v",
 			newBaseModel.Name, newBaseModel.Namespace, err)
@@ -377,6 +377,13 @@ func (w *Scout) updateBaseModel(old, new interface{}) {
 	if (policyChanged || hasChanges) && w.shouldDownloadModel(newBaseModel.Spec.Storage) {
 		w.logger.Infof("BaseModel %s needs refresh in namespace %s", newBaseModel.GetName(), newBaseModel.GetNamespace())
 		w.generateDownloadOverrideTaskBasedOnBaseModel(newBaseModel)
+	} else if effectiveModelDownloadPriority(oldBaseModel.Spec.Storage, &oldBaseModel.Status) !=
+		effectiveModelDownloadPriority(newBaseModel.Spec.Storage, &newBaseModel.Status) &&
+		w.shouldDownloadModel(newBaseModel.Spec.Storage) {
+		w.gopherChan <- &GopherTask{
+			TaskType: Reprioritize, BaseModel: newBaseModel,
+			DownloadPriority: effectiveModelDownloadPriority(newBaseModel.Spec.Storage, &newBaseModel.Status),
+		}
 	}
 }
 
@@ -409,14 +416,14 @@ func (w *Scout) updateClusterBaseModel(old, new interface{}) {
 
 	policyChanged := w.isToDownloadOverrideDueToDownloadPolicyBasedOnCBM(oldClusterBaseModel, newClusterBaseModel)
 
-	// Exclude DownloadPolicy from Spec diff — policy changes are detected separately above.
-	ignoreDownloadPolicy := cmpopts.IgnoreFields(v1beta1.StorageSpec{}, "DownloadPolicy")
+	// Policy changes are handled separately; priority changes only reorder work.
+	ignoreScheduling := cmpopts.IgnoreFields(v1beta1.StorageSpec{}, "DownloadPolicy", "DownloadPriority")
 
 	hasChanges, err := hasDownloadOverrideChanges([]downloadOverrideChangeCandidate{
 		{"Labels", oldClusterBaseModel.Labels, newClusterBaseModel.Labels},
 		{"Annotations", oldClusterBaseModel.Annotations, newClusterBaseModel.Annotations},
 		{"DownloadOverrideInputs", downloadOverrideInputsFromSpec(oldClusterBaseModel.Spec), downloadOverrideInputsFromSpec(newClusterBaseModel.Spec)},
-	}, ignoreDownloadPolicy)
+	}, ignoreScheduling)
 	if err != nil {
 		w.logger.Errorf("Failed to diff ClusterBaseModel %s: %v", newClusterBaseModel.Name, err)
 		return
@@ -425,6 +432,13 @@ func (w *Scout) updateClusterBaseModel(old, new interface{}) {
 	if (policyChanged || hasChanges) && w.shouldDownloadModel(newClusterBaseModel.Spec.Storage) {
 		w.logger.Infof("ClusterBaseModel %s need refresh", newClusterBaseModel.GetName())
 		w.generateDownloadOverrideTaskBasedOnClusterBaseModel(newClusterBaseModel)
+	} else if effectiveModelDownloadPriority(oldClusterBaseModel.Spec.Storage, &oldClusterBaseModel.Status) !=
+		effectiveModelDownloadPriority(newClusterBaseModel.Spec.Storage, &newClusterBaseModel.Status) &&
+		w.shouldDownloadModel(newClusterBaseModel.Spec.Storage) {
+		w.gopherChan <- &GopherTask{
+			TaskType: Reprioritize, ClusterBaseModel: newClusterBaseModel,
+			DownloadPriority: effectiveModelDownloadPriority(newClusterBaseModel.Spec.Storage, &newClusterBaseModel.Status),
+		}
 	}
 }
 
