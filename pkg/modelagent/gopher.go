@@ -114,7 +114,8 @@ func NewGopher(
 	metrics *Metrics,
 	logger *zap.SugaredLogger,
 	baseModelLister omev1beta1lister.BaseModelLister,
-	clusterBaseModelLister omev1beta1lister.ClusterBaseModelLister) (*Gopher, error) {
+	clusterBaseModelLister omev1beta1lister.ClusterBaseModelLister,
+	options ...GopherOption) (*Gopher, error) {
 
 	if xetConfig == nil {
 		return nil, fmt.Errorf("xet hugging face config cannot be nil")
@@ -123,7 +124,7 @@ func NewGopher(
 		samePathWaitTimeout = defaultSamePathWaitTimeout
 	}
 
-	return &Gopher{
+	gopher := &Gopher{
 		modelConfigParser:      modelConfigParser,
 		configMapReconciler:    configMapReconciler,
 		downloadRetry:          downloadRetry,
@@ -142,7 +143,13 @@ func NewGopher(
 		taskQueue:              newGopherTaskQueue(),
 		samePathWaitDelay:      defaultSamePathWaitDelay,
 		samePathWaitTimeout:    samePathWaitTimeout,
-	}, nil
+	}
+	for _, option := range options {
+		if err := option(gopher); err != nil {
+			return nil, err
+		}
+	}
+	return gopher, nil
 }
 
 // SetTaskSchedulerCapacity bounds queued model work while preserving delete

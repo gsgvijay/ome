@@ -142,6 +142,7 @@ func TestSchedulingContractFlagsAreRegistered(t *testing.T) {
 	}{
 		{name: "num-high-priority-worker", defaultValue: "1"},
 		{name: "task-scheduler-capacity", defaultValue: "4096"},
+		{name: "download-scheduling-policy", defaultValue: "priority"},
 		{name: "same-path-reuse-wait-timeout", defaultValue: "30m0s"},
 	}
 

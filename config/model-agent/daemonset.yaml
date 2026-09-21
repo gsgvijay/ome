@@ -52,6 +52,8 @@ spec:
         - '1'
         - --task-scheduler-capacity
         - '4096'
+        - --download-scheduling-policy
+        - priority
         - --same-path-reuse-wait-timeout
         - 30m
         - --concurrency

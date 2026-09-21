@@ -71,6 +71,12 @@ spec:
         - {{ .Values.modelAgent.numHighPriorityWorkers | quote }}
         - --task-scheduler-capacity
         - {{ .Values.modelAgent.taskSchedulerCapacity | quote }}
+        {{- $policy := .Values.modelAgent.downloadSchedulingPolicy }}
+        {{- if not (has $policy (list "priority" "fifo")) }}
+        {{- fail "modelAgent.downloadSchedulingPolicy must be priority or fifo" }}
+        {{- end }}
+        - --download-scheduling-policy
+        - {{ $policy | quote }}
         - --same-path-reuse-wait-timeout
         - {{ .Values.modelAgent.samePathReuseWaitTimeout | quote }}
         env:

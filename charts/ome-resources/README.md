@@ -19,6 +19,7 @@ OME Resources and Controller
 | modelAgent.extraVolumeMounts | list | `[]` |  |
 | modelAgent.extraVolumes | list | `[]` |  |
 | modelAgent.numDownloadWorkers | int | `2` |  |
+| modelAgent.downloadSchedulingPolicy | string | `"priority"` | Remote-download order: `priority` or `fifo`. Requires an agent rollout. Cleanup/reuse protection remains active. |
 | modelAgent.numHighPriorityWorkers | int | `1` |  |
 | modelAgent.priorityClassName | string | `""` |  |
 | modelAgent.resources.limits.cpu | string | `"10"` |  |

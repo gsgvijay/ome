@@ -33,22 +33,23 @@ import (
 
 // config holds all configuration parameters for the model agent
 type config struct {
-	port                  int
-	modelsRootDir         string
-	modelsRootDirOnHost   string
-	nodeName              string
-	nodeLabelRetry        int
-	concurrency           int
-	multipartConcurrency  int
-	downloadRetry         int
-	downloadAuthType      string
-	numDownloadWorker     int
-	numHighPriorityWorker int
-	taskSchedulerCapacity int
-	samePathReuseTimeout  time.Duration
-	legacySamePathTimeout time.Duration
-	namespace             string
-	logLevel              string
+	port                     int
+	modelsRootDir            string
+	modelsRootDirOnHost      string
+	nodeName                 string
+	nodeLabelRetry           int
+	concurrency              int
+	multipartConcurrency     int
+	downloadRetry            int
+	downloadAuthType         string
+	numDownloadWorker        int
+	numHighPriorityWorker    int
+	taskSchedulerCapacity    int
+	downloadSchedulingPolicy string
+	samePathReuseTimeout     time.Duration
+	legacySamePathTimeout    time.Duration
+	namespace                string
+	logLevel                 string
 }
 
 // Logger type alias for zap.SugaredLogger
@@ -79,6 +80,7 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&cfg.numDownloadWorker, "num-download-worker", 5, "Number of remote-download workers, ordered by model download priority")
 	rootCmd.PersistentFlags().IntVar(&cfg.numHighPriorityWorker, "num-high-priority-worker", 1, "Number of dedicated delete and same-path reuse workers (no remote downloads)")
 	rootCmd.PersistentFlags().IntVar(&cfg.taskSchedulerCapacity, "task-scheduler-capacity", 4096, "Maximum number of distinct queued model tasks")
+	rootCmd.PersistentFlags().StringVar(&cfg.downloadSchedulingPolicy, "download-scheduling-policy", modelagent.DownloadSchedulingPolicyPriority, "Remote-download ordering: priority or fifo; changing policy requires an agent rollout")
 	rootCmd.PersistentFlags().DurationVar(&cfg.samePathReuseTimeout, "same-path-reuse-wait-timeout", 30*time.Minute, "Maximum time to wait for another task populating the same local artifact path before resuming the normal download flow")
 	rootCmd.PersistentFlags().DurationVar(&cfg.legacySamePathTimeout, "same-path-wait-timeout", 0, "Deprecated alias for --same-path-reuse-wait-timeout")
 	_ = rootCmd.PersistentFlags().MarkDeprecated("same-path-wait-timeout", "use --same-path-reuse-wait-timeout")
@@ -207,6 +209,9 @@ func initializeComponents(
 	logger *Logger,
 	flags *pflag.FlagSet,
 ) (*modelagent.Scout, *modelagent.Gopher, error) {
+	if err := modelagent.ValidateDownloadSchedulingPolicy(cfg.downloadSchedulingPolicy); err != nil {
+		return nil, nil, err
+	}
 	// Create node label reconciler for labeling the node based on model status
 	nodeLabelReconciler := modelagent.NewNodeLabelReconciler(cfg.nodeName, kubeClient, cfg.nodeLabelRetry, logger)
 
@@ -285,6 +290,7 @@ func initializeComponents(
 		logger,
 		baseModelInformer.Lister(),
 		clusterBaseModelInformer.Lister(),
+		modelagent.WithDownloadSchedulingPolicy(cfg.downloadSchedulingPolicy),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create gopher: %w", err)

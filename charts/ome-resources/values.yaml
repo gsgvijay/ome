@@ -684,6 +684,10 @@ modelAgent:
   # Dedicated delete/reuse workers; never used for remote weight transfers.
   numHighPriorityWorkers: 1
   taskSchedulerCapacity: 4096
+  # Agent-startup policy: priority honors model and serving-demand priorities;
+  # fifo ignores both. Cleanup/reuse safety remains enabled in either mode.
+  # Changing this value rolls the agent Pods; it is not a live toggle.
+  downloadSchedulingPolicy: priority
   # Maximum time to wait for another task populating the same local artifact
   # path before resuming the normal download flow.
   samePathReuseWaitTimeout: 30m

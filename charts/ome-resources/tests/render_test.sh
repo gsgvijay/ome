@@ -152,6 +152,18 @@ if grep -Fq 'priorityClassName:' <<<"${model_agent}"; then
   fail "model agent rendered a PriorityClass when none was configured"
 fi
 
+grep -A1 -- '--download-scheduling-policy' <<<"${model_agent}" | grep -Fq '"priority"' ||
+  fail "model agent must default to priority ordering"
+fifo_model_agent="$("${helm_bin}" template ome-resources "${chart_dir}" \
+  --set modelAgent.enabled=true --set modelAgent.downloadSchedulingPolicy=fifo \
+  --show-only templates/model-agent-daemonset/daemonset.yaml)"
+grep -A1 -- '--download-scheduling-policy' <<<"${fifo_model_agent}" | grep -Fq '"fifo"' ||
+  fail "FIFO policy was not rendered in the Pod arguments"
+if "${helm_bin}" template ome-resources "${chart_dir}" --set modelAgent.enabled=true \
+  --set modelAgent.downloadSchedulingPolicy=typo >/dev/null 2>&1; then
+  fail "invalid download scheduling policy was accepted"
+fi
+
 prioritized_model_agent="$("${helm_bin}" template ome-resources "${chart_dir}" \
   --namespace ome \
   --set modelAgent.enabled=true \

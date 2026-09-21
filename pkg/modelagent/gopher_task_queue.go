@@ -8,18 +8,19 @@ import (
 )
 
 type gopherTaskQueue struct {
-	mutex               sync.Mutex
-	cond                *sync.Cond
-	high                []*GopherTask
-	urgentDownload      []*GopherTask
-	normalDownload      []*GopherTask
-	normalRevalidation  []*GopherTask
-	pendingHigh         []*GopherTask
-	pendingUrgent       []*GopherTask
-	pendingDownload     []*GopherTask
-	pendingRevalidation []*GopherTask
-	capacity            int
-	closed              bool
+	mutex                    sync.Mutex
+	cond                     *sync.Cond
+	high                     []*GopherTask
+	urgentDownload           []*GopherTask
+	normalDownload           []*GopherTask
+	normalRevalidation       []*GopherTask
+	pendingHigh              []*GopherTask
+	pendingUrgent            []*GopherTask
+	pendingDownload          []*GopherTask
+	pendingRevalidation      []*GopherTask
+	capacity                 int
+	closed                   bool
+	downloadSchedulingPolicy string
 }
 
 type gopherTaskEnqueueResult struct {
@@ -79,8 +80,17 @@ func (q *gopherTaskQueue) enqueueLocked(task *GopherTask) gopherTaskEnqueueResul
 		return gopherTaskEnqueueResult{}
 	}
 	if task.TaskType == Reprioritize {
-		q.reprioritizeLocked(task)
+		if q.downloadSchedulingPolicy != DownloadSchedulingPolicyFIFO {
+			q.reprioritizeLocked(task)
+		}
 		return gopherTaskEnqueueResult{accepted: true}
+	}
+	if q.downloadSchedulingPolicy == DownloadSchedulingPolicyFIFO {
+		// Normalize a copy: neither explicit priority nor persisted serving
+		// demand may affect FIFO routing, coalescing, or reuse eligibility.
+		copy := *task
+		copy.DownloadPriority = v1beta1.ModelDownloadPriorityStandard
+		task = &copy
 	}
 	if retained := q.retainedTaskLocked(task); retained != nil {
 		return gopherTaskEnqueueResult{accepted: true, deferred: q.isPendingLocked(retained)}
@@ -93,7 +103,7 @@ func (q *gopherTaskQueue) enqueueLocked(task *GopherTask) gopherTaskEnqueueResul
 		return gopherTaskEnqueueResult{accepted: true}
 	}
 
-	q.appendPendingLocked(task, taskQueueLane(task))
+	q.appendPendingLocked(task, q.taskQueueLane(task))
 	q.rebalanceLocked()
 	return gopherTaskEnqueueResult{
 		accepted: true,
@@ -323,6 +333,15 @@ func taskQueueLane(task *GopherTask) gopherTaskQueueLane {
 		return gopherTaskQueueLaneHigh
 	}
 	return downloadTaskLane(task)
+}
+
+func (q *gopherTaskQueue) taskQueueLane(task *GopherTask) gopherTaskQueueLane {
+	if q.downloadSchedulingPolicy == DownloadSchedulingPolicyFIFO && !shouldUseHighPriorityQueue(task) {
+		// Startup revalidation and Background work share the FIFO download
+		// lane. Cleanup and local reuse still have their dedicated workers.
+		return gopherTaskQueueLaneDownload
+	}
+	return taskQueueLane(task)
 }
 
 func downloadTaskLane(task *GopherTask) gopherTaskQueueLane {
