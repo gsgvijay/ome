@@ -89,6 +89,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.DiffusionComponentSpec":           schema_pkg_apis_ome_v1beta1_DiffusionComponentSpec(ref),
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.DiffusionPipelineSpec":            schema_pkg_apis_ome_v1beta1_DiffusionPipelineSpec(ref),
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.Endpoint":                         schema_pkg_apis_ome_v1beta1_Endpoint(ref),
+		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EndpointDownloadDemandStatus":     schema_pkg_apis_ome_v1beta1_EndpointDownloadDemandStatus(ref),
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EndpointOverrideSpec":             schema_pkg_apis_ome_v1beta1_EndpointOverrideSpec(ref),
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EndpointSpec":                     schema_pkg_apis_ome_v1beta1_EndpointSpec(ref),
 		"sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EngineSpec":                       schema_pkg_apis_ome_v1beta1_EngineSpec(ref),
@@ -2635,6 +2636,14 @@ func schema_pkg_apis_ome_v1beta1_BaseModelSpec(ref common.ReferenceCallback) com
 				Description: "BaseModelSpec defines the desired state of BaseModel",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"downloadSelectionPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DownloadSelectionPolicy overrides the agent's download-selection policy. Eager preserves import/prewarm workflows that need model metadata before an endpoint exists. Endpoint requires a current endpoint demand observation. This selects downloads; it does not change node eligibility or delete files. Applies only to per-node model-agent downloads, not PVC or sharded backends.\n\nPossible enum values:\n - `\"Eager\"`\n - `\"Endpoint\"`",
+							Type:        []string{"string"},
+							Format:      "",
+							Enum:        []interface{}{"Eager", "Endpoint"},
+						},
+					},
 					"modelFormat": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
@@ -5325,6 +5334,34 @@ func schema_pkg_apis_ome_v1beta1_Endpoint(ref common.ReferenceCallback) common.O
 					},
 				},
 				Required: []string{"url", "apiFormat"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_ome_v1beta1_EndpointDownloadDemandStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "EndpointDownloadDemandStatus counts non-deleting InferenceService references. It does not require a Ready endpoint or a bound Pod.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"observedGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int64",
+						},
+					},
+					"referenceCount": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+				},
+				Required: []string{"observedGeneration", "referenceCount"},
 			},
 		},
 	}
@@ -9778,6 +9815,12 @@ func schema_pkg_apis_ome_v1beta1_ModelStatusSpec(ref common.ReferenceCallback) c
 				Description: "ModelStatusSpec defines the observed state of Model weight",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"endpointDownloadDemand": {
+						SchemaProps: spec.SchemaProps{
+							Description: "EndpointDownloadDemand is the controller's endpoint-reference observation. Nil means unknown or disabled, not a confirmed zero. Agents in Endpoint mode wait for a positive observation of the current model generation.",
+							Ref:         ref("sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EndpointDownloadDemandStatus"),
+						},
+					},
 					"lifecycle": {
 						SchemaProps: spec.SchemaProps{
 							Description: "LifeCycle is the model's lifecycle stage, such as Deprecated, Experiment, Public or Internal. The API server doesn't check the value, and OME doesn't set it.",
@@ -9877,7 +9920,7 @@ func schema_pkg_apis_ome_v1beta1_ModelStatusSpec(ref common.ReferenceCallback) c
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time", "sigs.k8s.io/ome/pkg/apis/ome/v1beta1.ModelCacheStatus"},
+			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time", "sigs.k8s.io/ome/pkg/apis/ome/v1beta1.EndpointDownloadDemandStatus", "sigs.k8s.io/ome/pkg/apis/ome/v1beta1.ModelCacheStatus"},
 	}
 }
 

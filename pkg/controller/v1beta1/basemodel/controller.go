@@ -2,6 +2,7 @@ package basemodel
 
 import (
 	"context"
+	stderrors "errors"
 
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
@@ -39,6 +40,8 @@ import (
 
 type BaseModelReconciler struct {
 	client.Client
+	// ConsumerReader bypasses the serving-Pod-filtered manager cache.
+	ConsumerReader client.Reader
 	// APIReader confirms Node absence without the informer cache before cleanup.
 	APIReader      client.Reader
 	Log            logr.Logger
@@ -48,6 +51,8 @@ type BaseModelReconciler struct {
 
 type ClusterBaseModelReconciler struct {
 	client.Client
+	// ConsumerReader bypasses the serving-Pod-filtered manager cache.
+	ConsumerReader client.Reader
 	// APIReader confirms Node absence without the informer cache before cleanup.
 	APIReader      client.Reader
 	Log            logr.Logger
@@ -82,7 +87,9 @@ func (r *BaseModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log.Error(err, "Failed to get BaseModel")
 		return ctrl.Result{}, err
 	}
-	return reconcileModel(ctx, r.Client, r.Scheme, log, r.backends(), baseModel, constants.BaseModelFinalizer, false, "BaseModel")
+	retireErr := retireEndpointDemand(ctx, r.Client, r.ConsumerReader, baseModel)
+	result, err := reconcileModel(ctx, r.Client, r.Scheme, log, r.backends(), baseModel, constants.BaseModelFinalizer, false, "BaseModel")
+	return result, stderrors.Join(err, retireErr)
 }
 
 func (r *ClusterBaseModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -96,7 +103,9 @@ func (r *ClusterBaseModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		log.Error(err, "Failed to get ClusterBaseModel")
 		return ctrl.Result{}, err
 	}
-	return reconcileModel(ctx, r.Client, r.Scheme, log, r.backends(), clusterBaseModel, constants.ClusterBaseModelFinalizer, true, "ClusterBaseModel")
+	retireErr := retireEndpointDemand(ctx, r.Client, r.ConsumerReader, clusterBaseModel)
+	result, err := reconcileModel(ctx, r.Client, r.Scheme, log, r.backends(), clusterBaseModel, constants.ClusterBaseModelFinalizer, true, "ClusterBaseModel")
+	return result, stderrors.Join(err, retireErr)
 }
 
 func reconcileModel(ctx context.Context, c client.Client, scheme *runtime.Scheme, log logr.Logger, backends []shared.Backend, obj client.Object, finalizer string, isClusterScoped bool, kind string) (ctrl.Result, error) {
@@ -145,6 +154,7 @@ func reconcileModel(ctx context.Context, c client.Client, scheme *runtime.Scheme
 }
 
 func (r *BaseModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.ConsumerReader = mgr.GetAPIReader()
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()
 	}
@@ -179,6 +189,7 @@ func (r *BaseModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *ClusterBaseModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.ConsumerReader = mgr.GetAPIReader()
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()
 	}

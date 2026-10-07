@@ -192,6 +192,13 @@ const (
 
 // BaseModelSpec defines the desired state of BaseModel
 type BaseModelSpec struct {
+	// DownloadSelectionPolicy overrides the agent's download-selection policy.
+	// Eager preserves import/prewarm workflows that need model metadata before an
+	// endpoint exists. Endpoint requires a current endpoint demand observation.
+	// This selects downloads; it does not change node eligibility or delete files.
+	// Applies only to per-node model-agent downloads, not PVC or sharded backends.
+	// +optional
+	DownloadSelectionPolicy *ModelDownloadSelectionPolicy `json:"downloadSelectionPolicy,omitempty"`
 	// +optional
 	ModelFormat ModelFormat `json:"modelFormat"`
 
@@ -520,6 +527,11 @@ type ModelCacheStatus struct {
 
 // ModelStatusSpec defines the observed state of Model weight
 type ModelStatusSpec struct {
+	// EndpointDownloadDemand is the controller's endpoint-reference observation.
+	// Nil means unknown or disabled, not a confirmed zero. Agents in Endpoint
+	// mode wait for a positive observation of the current model generation.
+	// +optional
+	EndpointDownloadDemand *EndpointDownloadDemandStatus `json:"endpointDownloadDemand,omitempty"`
 	// LifeCycle is the model's lifecycle stage, such as Deprecated,
 	// Experiment, Public or Internal. The API server doesn't check the
 	// value, and OME doesn't set it.
@@ -673,4 +685,23 @@ func init() {
 	SchemeBuilder.Register(&BaseModel{}, &BaseModelList{})
 	SchemeBuilder.Register(&FineTunedWeight{}, &FineTunedWeightList{})
 	SchemeBuilder.Register(&ClusterBaseModel{}, &ClusterBaseModelList{})
+}
+
+// ModelDownloadSelectionPolicy selects which eligible models an agent downloads.
+// +enum
+// +kubebuilder:validation:Enum=Eager;Endpoint
+type ModelDownloadSelectionPolicy string
+
+const (
+	ModelDownloadSelectionEager    ModelDownloadSelectionPolicy = "Eager"
+	ModelDownloadSelectionEndpoint ModelDownloadSelectionPolicy = "Endpoint"
+)
+
+// EndpointDownloadDemandStatus counts non-deleting InferenceService references.
+// It does not require a Ready endpoint or a bound Pod.
+type EndpointDownloadDemandStatus struct {
+	// +kubebuilder:validation:Minimum=0
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// +kubebuilder:validation:Minimum=0
+	ReferenceCount int32 `json:"referenceCount"`
 }
