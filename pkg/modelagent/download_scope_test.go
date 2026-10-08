@@ -3,6 +3,7 @@ package modelagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -10,12 +11,53 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/ome/pkg/apis/ome/v1beta1"
 	listers "sigs.k8s.io/ome/pkg/client/listers/ome/v1beta1"
 )
+
+type countingBaseModelLister struct {
+	listers.BaseModelLister
+	calls int
+	err   error
+}
+
+func (l *countingBaseModelLister) List(selector labels.Selector) ([]*v1beta1.BaseModel, error) {
+	l.calls++
+	if l.err != nil {
+		return nil, l.err
+	}
+	return l.BaseModelLister.List(selector)
+}
+
+func TestDownloadScopeHeartbeatSkipsCatalogReplayButRetriesFailure(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n", UID: "uid", Labels: map[string]string{"gpu": "a10"}}}
+	w := scopeScout(node)
+	w.kubeClient = fake.NewSimpleClientset(node)
+	w.gopherChan = make(chan *GopherTask, 8)
+	index := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	lister := &countingBaseModelLister{BaseModelLister: listers.NewBaseModelLister(index), err: fmt.Errorf("temporary cache failure")}
+	w.baseModelLister = lister
+	w.clusterBaseModelLister = listers.NewClusterBaseModelLister(index)
+	w.refreshDownloadScopeNode()
+	require.Equal(t, 1, lister.calls)
+	lister.err = nil
+	w.refreshDownloadScopeNode()
+	require.Equal(t, 2, lister.calls, "failed replay must not be marked complete")
+	for i := 0; i < 100; i++ {
+		w.refreshDownloadScopeNode()
+	}
+	require.Equal(t, 2, lister.calls, "unchanged selection must not scan all models every tick")
+	updated := node.DeepCopy()
+	updated.Labels["gpu"] = "h100"
+	_, err := w.kubeClient.CoreV1().Nodes().Update(context.Background(), updated, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	w.refreshDownloadScopeNode()
+	require.Equal(t, 3, lister.calls, "any baseline selector label change must still replay")
+}
 
 func scopeModel() *v1beta1.ClusterBaseModel {
 	uri := "oci://bucket@ns/model"

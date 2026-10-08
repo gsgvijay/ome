@@ -171,6 +171,13 @@ func (w *Scout) refreshDownloadScopeNode() {
 	w.nodeMu.Lock()
 	w.scopeNode = node
 	w.nodeMu.Unlock()
+	// Eligibility depends on node identity and labels, not heartbeat/status or
+	// resourceVersion. Model changes are handled by the existing model watches.
+	// Only skip after a successful replay; a failed list must be retried even
+	// when the next node GET has identical selection inputs.
+	if w.scopeReplayNode != nil && old.UID == node.UID && old.Name == node.Name && reflect.DeepEqual(old.Labels, node.Labels) {
+		return
+	}
 	baseModels, err := w.baseModelLister.List(labels.Everything())
 	if err != nil {
 		w.logger.Warnf("Cannot replay model scope: %v", err)
