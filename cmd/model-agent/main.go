@@ -32,21 +32,25 @@ import (
 
 // config holds all configuration parameters for the model agent
 type config struct {
-	port                         int
-	modelsRootDir                string
-	modelsRootDirOnHost          string
-	nodeName                     string
-	nodeLabelRetry               int
-	concurrency                  int
-	multipartConcurrency         int
-	modelVerificationConcurrency int
-	downloadRetry                int
-	downloadAuthType             string
-	numDownloadWorker            int
-	numHighPriorityWorker        int
-	samePathWaitTimeout          time.Duration
-	namespace                    string
-	logLevel                     string
+	downloadScopeNodeLabel          string
+	downloadScopePoolLabel          string
+	downloadScopeVerifiedAnnotation string
+	downloadScopeQuarantineTaint    string
+	port                            int
+	modelsRootDir                   string
+	modelsRootDirOnHost             string
+	nodeName                        string
+	nodeLabelRetry                  int
+	concurrency                     int
+	multipartConcurrency            int
+	modelVerificationConcurrency    int
+	downloadRetry                   int
+	downloadAuthType                string
+	numDownloadWorker               int
+	numHighPriorityWorker           int
+	samePathWaitTimeout             time.Duration
+	namespace                       string
+	logLevel                        string
 }
 
 // effectiveVerificationConcurrency resolves the pod-wide verification limit.
@@ -88,6 +92,10 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&cfg.samePathWaitTimeout, "same-path-wait-timeout", 30*time.Minute, "Maximum time to wait for same-path model reuse before falling back to normal download")
 	rootCmd.PersistentFlags().StringVar(&cfg.namespace, "namespace", "ome", "Kubernetes namespace to use")
 	rootCmd.PersistentFlags().StringVar(&cfg.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().StringVar(&cfg.downloadScopeNodeLabel, "download-scope-node-label", "", "Node classification for controller-scoped eager downloads")
+	rootCmd.PersistentFlags().StringVar(&cfg.downloadScopePoolLabel, "download-scope-pool-label", "", "Verified pool membership label")
+	rootCmd.PersistentFlags().StringVar(&cfg.downloadScopeVerifiedAnnotation, "download-scope-verified-annotation", "", "Annotation confirming node identity verification")
+	rootCmd.PersistentFlags().StringVar(&cfg.downloadScopeQuarantineTaint, "download-scope-quarantine-taint", "", "Taint blocking new downloads until node identity is verified")
 
 	_ = v.BindPFlags(rootCmd.PersistentFlags())
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -290,6 +298,15 @@ func initializeComponents(
 		return nil, nil, fmt.Errorf("failed to create gopher: %w", err)
 	}
 
+	scope := modelagent.DownloadScope{NodeLabel: v.GetString("download-scope-node-label"), PoolLabel: v.GetString("download-scope-pool-label"),
+		VerifiedAnnotation: v.GetString("download-scope-verified-annotation"), QuarantineTaint: v.GetString("download-scope-quarantine-taint")}
+	if err := scope.Validate(); err != nil {
+		return nil, nil, err
+	}
+	scout.DownloadScope = scope
+	if scope.NodeLabel != "" {
+		gopher.TaskAllowed = scout.CurrentTaskAllowed
+	}
 	return scout, gopher, nil
 }
 

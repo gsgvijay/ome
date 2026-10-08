@@ -1,0 +1,14 @@
+title: Controller-scoped eager model downloads
+oep-number: 0013
+authors:
+  - "@gsgvijay"
+status: provisional
+creation-date: 2026-10-08
+reviewers:
+  - TBD
+approvers:
+  - TBD
+stage: alpha
+feature-gates:
+  - name: download-scope-node-label
+disable-supported: true
