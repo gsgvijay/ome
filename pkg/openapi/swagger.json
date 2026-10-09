@@ -1408,14 +1408,6 @@
           "description": "Distribution selects how the model's weights are laid out across the cluster. PerNode, the default, puts a full copy on each selected node. Sharded is for loading the model through an external cache that holds it in chunks across the cluster. Sharded is in development: OME has no way to configure such a cache yet, so a Sharded model can't be served. pvc:// models can't use Sharded.",
           "type": "string"
         },
-        "downloadSelectionPolicy": {
-          "description": "DownloadSelectionPolicy overrides the agent's download-selection policy. Eager preserves import/prewarm workflows that need model metadata before an endpoint exists. Endpoint requires a current endpoint demand observation. This selects downloads; it does not change node eligibility or delete files. Applies only to per-node model-agent downloads, not PVC or sharded backends.\n\nPossible enum values:\n - `\"Eager\"`\n - `\"Endpoint\"`",
-          "type": "string",
-          "enum": [
-            "Eager",
-            "Endpoint"
-          ]
-        },
         "maxTokens": {
           "description": "MaxTokens is the maximum number of tokens that can be processed by the model",
           "type": "integer",
@@ -2924,26 +2916,6 @@
           "description": "URL represents the endpoint URL for the inference service.",
           "type": "string",
           "default": ""
-        }
-      }
-    },
-    "v1beta1.EndpointDownloadDemandStatus": {
-      "description": "EndpointDownloadDemandStatus counts non-deleting InferenceService references. It does not require a Ready endpoint or a bound Pod.",
-      "type": "object",
-      "required": [
-        "observedGeneration",
-        "referenceCount"
-      ],
-      "properties": {
-        "observedGeneration": {
-          "type": "integer",
-          "format": "int64",
-          "default": 0
-        },
-        "referenceCount": {
-          "type": "integer",
-          "format": "int32",
-          "default": 0
         }
       }
     },
@@ -5535,10 +5507,6 @@
             "type"
           ],
           "x-kubernetes-list-type": "map"
-        },
-        "endpointDownloadDemand": {
-          "description": "EndpointDownloadDemand is the controller's endpoint-reference observation. Nil means unknown or disabled, not a confirmed zero. Agents in Endpoint mode wait for a positive observation of the current model generation.",
-          "$ref": "#/definitions/v1beta1.EndpointDownloadDemandStatus"
         },
         "lastReconcileTime": {
           "description": "LastReconcileTime is the wall-clock timestamp of the controller's most recent reconcile pass for this object. Liveness signal — if it falls behind by more than the reconcile period, the controller is wedged or not scheduled. Distinct from Condition.lastTransitionTime, which only advances on actual status flips.",

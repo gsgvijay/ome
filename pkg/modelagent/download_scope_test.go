@@ -34,7 +34,7 @@ func (l *countingBaseModelLister) List(selector labels.Selector) ([]*v1beta1.Bas
 }
 
 func TestDownloadScopeHeartbeatSkipsCatalogReplayButRetriesFailure(t *testing.T) {
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n", UID: "uid", Labels: map[string]string{"gpu": "a10"}}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n", UID: "uid", Labels: map[string]string{"gpu": "a10", "test/scoped": "true"}}}
 	w := scopeScout(node)
 	w.kubeClient = fake.NewSimpleClientset(node)
 	w.gopherChan = make(chan *GopherTask, 8)
@@ -162,7 +162,7 @@ func TestDownloadScopeProjectionUpdateDoesNotRestartOrdinaryDownloads(t *testing
 }
 
 func TestDownloadScopeEmptyRequiredAffinityMatchesNothing(t *testing.T) {
-	w := scopeScout(&corev1.Node{})
+	w := scopeScout(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"test/scoped": "true"}}})
 	for _, terms := range [][]corev1.NodeSelectorTerm{nil, {{}}} {
 		require.False(t, w.shouldDownloadModel(&v1beta1.StorageSpec{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: terms}}}))
 	}

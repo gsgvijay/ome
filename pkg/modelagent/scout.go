@@ -34,6 +34,7 @@ type Scout struct {
 	eventMu                sync.Mutex
 	nodeMu                 sync.RWMutex
 	scopeNode              *v1.Node
+	scopeRequired          bool
 	scopeReplayNode        *v1.Node
 	ctx                    context.Context
 	baseModelLister        omev1beta1lister.BaseModelLister
@@ -247,7 +248,7 @@ syncComplete:
 	// This ensures we catch any deletion requests that occurred while the agent was down
 	w.reconcilePendingDeletions()
 
-	if w.DownloadScope.NodeLabel != "" {
+	if w.requiresScope() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 	loop:
@@ -613,7 +614,7 @@ func (w *Scout) shouldDownloadModelCommon(storageSpec *v1beta1.StorageSpec, defa
 	// Check NodeAffinity if specified
 	if storageSpec.NodeAffinity != nil && storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
 		nodeSelectorTerms := storageSpec.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-		if len(nodeSelectorTerms) == 0 {
+		if len(nodeSelectorTerms) == 0 && w.DownloadScope.appliesTo(w.nodeInfo) {
 			return false
 		}
 		if len(nodeSelectorTerms) > 0 {
@@ -640,7 +641,7 @@ func (w *Scout) shouldDownloadModel(storageSpec *v1beta1.StorageSpec) bool {
 }
 
 func (w *Scout) nodeMatchesSelectorTerm(term v1.NodeSelectorTerm) bool {
-	if len(term.MatchExpressions) == 0 && len(term.MatchFields) == 0 {
+	if len(term.MatchExpressions) == 0 && len(term.MatchFields) == 0 && w.DownloadScope.appliesTo(w.nodeInfo) {
 		return false
 	}
 	// Check match expressions
@@ -683,7 +684,8 @@ func (w *Scout) nodeMatchesExpression(expr v1.NodeSelectorRequirement) bool {
 	}
 
 	if !exists {
-		return expr.Operator == v1.NodeSelectorOpDoesNotExist || expr.Operator == v1.NodeSelectorOpNotIn
+		return expr.Operator == v1.NodeSelectorOpDoesNotExist ||
+			(expr.Operator == v1.NodeSelectorOpNotIn && w.DownloadScope.appliesTo(w.nodeInfo))
 	}
 
 	switch expr.Operator {

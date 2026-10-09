@@ -269,20 +269,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              endpointDownloadDemand:
-                properties:
-                  observedGeneration:
-                    format: int64
-                    minimum: 0
-                    type: integer
-                  referenceCount:
-                    format: int32
-                    minimum: 0
-                    type: integer
-                required:
-                - observedGeneration
-                - referenceCount
-                type: object
               lastReconcileTime:
                 format: date-time
                 type: string

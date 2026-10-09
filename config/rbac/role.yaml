@@ -82,13 +82,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apps
-  resources:
-  - daemonsets
-  verbs:
-  - get
-  - list
-- apiGroups:
   - authentication.k8s.io
   resources:
   - selfsubjectreviews

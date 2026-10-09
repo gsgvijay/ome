@@ -27,6 +27,7 @@ func (w *Scout) refreshNodeForAdd() bool {
 	}
 	w.nodeInfo = node
 	w.nodeMu.Lock()
+	w.scopeRequired = w.scopeRequired || w.DownloadScope.appliesTo(w.scopeNode) || w.DownloadScope.appliesTo(node)
 	w.scopeNode = node
 	w.nodeMu.Unlock()
 	return true
@@ -37,6 +38,24 @@ func (w *Scout) refreshNodeForAdd() bool {
 type DownloadScope struct {
 	NodeLabel string
 	PoolLabel string
+}
+
+// Scoped nodes must carry their classification at registration. Ordinary nodes
+// do not acquire a dependency on the scope controller or its model observations.
+func (s DownloadScope) appliesTo(node *corev1.Node) bool {
+	if s.NodeLabel == "" || node == nil {
+		return false
+	}
+	_, classified := node.Labels[s.NodeLabel]
+	_, pooled := node.Labels[s.PoolLabel]
+	return classified || pooled
+}
+
+func (w *Scout) requiresScope() bool {
+	w.nodeMu.Lock()
+	defer w.nodeMu.Unlock()
+	w.scopeRequired = w.scopeRequired || w.DownloadScope.appliesTo(w.scopeNode)
+	return w.scopeRequired
 }
 
 func (s DownloadScope) Validate() error {
@@ -71,6 +90,9 @@ func (w *Scout) scopeAllowsModel(meta metav1.Object, storage *v1beta1.StorageSpe
 	_, scoped := w.nodeInfo.Labels[w.DownloadScope.NodeLabel]
 	pool, hasPool := w.nodeInfo.Labels[w.DownloadScope.PoolLabel]
 	if !scoped && !hasPool {
+		if w.requiresScope() {
+			return false, false
+		}
 		return true, true
 	} // ordinary nodes keep eager semantics
 	if !scoped || !hasPool || pool == "" || storage == nil {
@@ -113,13 +135,17 @@ func downloadAnnotations(annotations map[string]string) map[string]string {
 // eligibility. In particular, a queued eligibility-loss Delete must not remove a
 // same-UID model which has become eligible again, or a same-name replacement.
 func (w *Scout) CurrentTaskAllowed(task *GopherTask) bool {
+	required := w.requiresScope()
 	w.nodeMu.RLock()
 	node := w.scopeNode
 	w.nodeMu.RUnlock()
 	if node == nil {
 		return false
 	}
-	evaluator := &Scout{nodeInfo: node, DownloadScope: w.DownloadScope, logger: w.logger}
+	if !required {
+		return true
+	}
+	evaluator := &Scout{nodeInfo: node, scopeNode: node, scopeRequired: required, DownloadScope: w.DownloadScope, logger: w.logger}
 	var current metav1.Object
 	var storage *v1beta1.StorageSpec
 	var queued metav1.Object
@@ -156,6 +182,9 @@ func (w *Scout) CurrentTaskAllowed(task *GopherTask) bool {
 // Refresh only this agent's node; there is no cluster-wide node or endpoint
 // informer per agent. Serialize refresh/replay with the two model informers.
 func (w *Scout) refreshDownloadScopeNode() {
+	if !w.requiresScope() {
+		return
+	}
 	node, err := w.kubeClient.CoreV1().Nodes().Get(w.ctx, w.nodeName, metav1.GetOptions{})
 	if err != nil {
 		w.logger.Warnf("Cannot refresh download scope node: %v", err)
@@ -170,6 +199,7 @@ func (w *Scout) refreshDownloadScopeNode() {
 	w.nodeInfo = node
 	w.nodeMu.Lock()
 	w.scopeNode = node
+	w.scopeRequired = true
 	w.nodeMu.Unlock()
 	// Eligibility depends on node identity and labels, not heartbeat/status or
 	// resourceVersion. Model changes are handled by the existing model watches.

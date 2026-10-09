@@ -1566,149 +1566,6 @@ properties:
 {{- include "ome-crd.schema.a035af7908a9" . | nindent 4 }}
 type: object
 {{- end }}
-{{- define "ome-crd.schema.79c382131b77" -}}
-properties:
-  additionalMetadata:
-    additionalProperties:
-      type: string
-    type: object
-  apiCapabilities:
-    items:
-      type: string
-    type: array
-    x-kubernetes-list-type: atomic
-  compartmentID:
-    type: string
-  diffusionPipeline:
-    properties:
-      additionalComponents:
-        additionalProperties:
-          properties:
-            library:
-              type: string
-            type:
-              type: string
-          type: object
-        type: object
-        x-kubernetes-map-type: atomic
-      className:
-        type: string
-      scheduler:
-        properties:
-          library:
-            type: string
-          type:
-            type: string
-        type: object
-      textEncoder:
-        properties:
-          library:
-            type: string
-          type:
-            type: string
-        type: object
-      tokenizer:
-        properties:
-          library:
-            type: string
-          type:
-            type: string
-        type: object
-      transformer:
-        properties:
-          library:
-            type: string
-          type:
-            type: string
-        type: object
-      vae:
-        properties:
-          library:
-            type: string
-          type:
-            type: string
-        type: object
-    type: object
-  disabled:
-    type: boolean
-  displayName:
-    type: string
-  distribution:
-    enum:
-    - PerNode
-    - Sharded
-    type: string
-  downloadSelectionPolicy:
-    enum:
-    - Eager
-    - Endpoint
-    type: string
-  maxTokens:
-    format: int32
-    type: integer
-  modelArchitecture:
-    type: string
-  modelCapabilities:
-    items:
-      type: string
-    type: array
-    x-kubernetes-list-type: atomic
-  modelConfiguration:
-    type: object
-    x-kubernetes-preserve-unknown-fields: true
-  modelFormat:
-    properties:
-      name:
-        type: string
-      operator:
-        default: Equal
-        type: string
-      version:
-        type: string
-      weight:
-        default: 1
-        format: int64
-        type: integer
-    required:
-    - name
-    type: object
-  modelFramework:
-    properties:
-      name:
-        type: string
-      operator:
-        default: Equal
-        type: string
-      version:
-        type: string
-      weight:
-        default: 1
-        format: int64
-        type: integer
-    required:
-    - name
-    type: object
-  modelParameterSize:
-    type: string
-  modelType:
-    type: string
-  quantization:
-    type: string
-  servingMode:
-    items:
-      type: string
-    type: array
-    x-kubernetes-list-type: atomic
-  storage:
-{{- include "ome-crd.schema.10810099e6d4" . | nindent 4 }}
-  vendor:
-    type: string
-  version:
-    type: string
-required:
-- storage
-type: object
-{{- end }}
 {{- define "ome-crd.schema.885dc83d8fda" -}}
 properties:
   acceleratorRequirements:
@@ -2745,6 +2602,96 @@ properties:
         type: string
     required:
     - path
+    type: object
+type: object
+{{- end }}
+{{- define "ome-crd.schema.abbad6a602ca" -}}
+properties:
+  apiVersion:
+    type: string
+  kind:
+    type: string
+  metadata:
+    type: object
+  spec:
+{{- include "ome-crd.schema.e95e0ef0f901" . | nindent 4 }}
+  status:
+    properties:
+      cache:
+        properties:
+          backend:
+            type: string
+          sourceUri:
+            type: string
+        type: object
+      conditions:
+        items:
+          properties:
+            lastTransitionTime:
+              format: date-time
+              type: string
+            message:
+              maxLength: 32768
+              type: string
+            observedGeneration:
+              format: int64
+              minimum: 0
+              type: integer
+            reason:
+              maxLength: 1024
+              minLength: 1
+              pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+              type: string
+            status:
+              enum:
+              - "True"
+              - "False"
+              - Unknown
+              type: string
+            type:
+              maxLength: 316
+              pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+              type: string
+          required:
+          - lastTransitionTime
+          - message
+          - reason
+          - status
+          - type
+          type: object
+        type: array
+        x-kubernetes-list-map-keys:
+        - type
+        x-kubernetes-list-type: map
+      lastReconcileTime:
+        format: date-time
+        type: string
+      lifecycle:
+        type: string
+      nodesFailed:
+        items:
+          type: string
+        type: array
+        x-kubernetes-list-type: atomic
+      nodesReady:
+        items:
+          type: string
+        type: array
+        x-kubernetes-list-type: atomic
+      observedGeneration:
+        format: int64
+        type: integer
+      state:
+        enum:
+        - Creating
+        - Importing
+        - In_Transit
+        - In_Training
+        - Ready
+        - Failed
+        type: string
+    required:
+    - state
     type: object
 type: object
 {{- end }}
@@ -4025,110 +3972,6 @@ properties:
     x-kubernetes-list-type: map
   workingDir:
     type: string
-type: object
-{{- end }}
-{{- define "ome-crd.schema.cd7fa3be6618" -}}
-properties:
-  apiVersion:
-    type: string
-  kind:
-    type: string
-  metadata:
-    type: object
-  spec:
-{{- include "ome-crd.schema.79c382131b77" . | nindent 4 }}
-  status:
-    properties:
-      cache:
-        properties:
-          backend:
-            type: string
-          sourceUri:
-            type: string
-        type: object
-      conditions:
-        items:
-          properties:
-            lastTransitionTime:
-              format: date-time
-              type: string
-            message:
-              maxLength: 32768
-              type: string
-            observedGeneration:
-              format: int64
-              minimum: 0
-              type: integer
-            reason:
-              maxLength: 1024
-              minLength: 1
-              pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
-              type: string
-            status:
-              enum:
-              - "True"
-              - "False"
-              - Unknown
-              type: string
-            type:
-              maxLength: 316
-              pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
-              type: string
-          required:
-          - lastTransitionTime
-          - message
-          - reason
-          - status
-          - type
-          type: object
-        type: array
-        x-kubernetes-list-map-keys:
-        - type
-        x-kubernetes-list-type: map
-      endpointDownloadDemand:
-        properties:
-          observedGeneration:
-            format: int64
-            minimum: 0
-            type: integer
-          referenceCount:
-            format: int32
-            minimum: 0
-            type: integer
-        required:
-        - observedGeneration
-        - referenceCount
-        type: object
-      lastReconcileTime:
-        format: date-time
-        type: string
-      lifecycle:
-        type: string
-      nodesFailed:
-        items:
-          type: string
-        type: array
-        x-kubernetes-list-type: atomic
-      nodesReady:
-        items:
-          type: string
-        type: array
-        x-kubernetes-list-type: atomic
-      observedGeneration:
-        format: int64
-        type: integer
-      state:
-        enum:
-        - Creating
-        - Importing
-        - In_Transit
-        - In_Training
-        - Ready
-        - Failed
-        type: string
-    required:
-    - state
-    type: object
 type: object
 {{- end }}
 {{- define "ome-crd.schema.d33943a18785" -}}
@@ -6152,6 +5995,144 @@ items:
 {{- include "ome-crd.schema.3144aaa2534a" . | nindent 2 }}
 type: array
 x-kubernetes-list-type: atomic
+{{- end }}
+{{- define "ome-crd.schema.e95e0ef0f901" -}}
+properties:
+  additionalMetadata:
+    additionalProperties:
+      type: string
+    type: object
+  apiCapabilities:
+    items:
+      type: string
+    type: array
+    x-kubernetes-list-type: atomic
+  compartmentID:
+    type: string
+  diffusionPipeline:
+    properties:
+      additionalComponents:
+        additionalProperties:
+          properties:
+            library:
+              type: string
+            type:
+              type: string
+          type: object
+        type: object
+        x-kubernetes-map-type: atomic
+      className:
+        type: string
+      scheduler:
+        properties:
+          library:
+            type: string
+          type:
+            type: string
+        type: object
+      textEncoder:
+        properties:
+          library:
+            type: string
+          type:
+            type: string
+        type: object
+      tokenizer:
+        properties:
+          library:
+            type: string
+          type:
+            type: string
+        type: object
+      transformer:
+        properties:
+          library:
+            type: string
+          type:
+            type: string
+        type: object
+      vae:
+        properties:
+          library:
+            type: string
+          type:
+            type: string
+        type: object
+    type: object
+  disabled:
+    type: boolean
+  displayName:
+    type: string
+  distribution:
+    enum:
+    - PerNode
+    - Sharded
+    type: string
+  maxTokens:
+    format: int32
+    type: integer
+  modelArchitecture:
+    type: string
+  modelCapabilities:
+    items:
+      type: string
+    type: array
+    x-kubernetes-list-type: atomic
+  modelConfiguration:
+    type: object
+    x-kubernetes-preserve-unknown-fields: true
+  modelFormat:
+    properties:
+      name:
+        type: string
+      operator:
+        default: Equal
+        type: string
+      version:
+        type: string
+      weight:
+        default: 1
+        format: int64
+        type: integer
+    required:
+    - name
+    type: object
+  modelFramework:
+    properties:
+      name:
+        type: string
+      operator:
+        default: Equal
+        type: string
+      version:
+        type: string
+      weight:
+        default: 1
+        format: int64
+        type: integer
+    required:
+    - name
+    type: object
+  modelParameterSize:
+    type: string
+  modelType:
+    type: string
+  quantization:
+    type: string
+  servingMode:
+    items:
+      type: string
+    type: array
+    x-kubernetes-list-type: atomic
+  storage:
+{{- include "ome-crd.schema.10810099e6d4" . | nindent 4 }}
+  vendor:
+    type: string
+  version:
+    type: string
+required:
+- storage
+type: object
 {{- end }}
 {{- define "ome-crd.schema.ea152dab22a5" -}}
 items:
